@@ -1,2 +1,5 @@
 .playwright-mcp
 usr_data_dir
+.env
+.env.*
+!.env.example
