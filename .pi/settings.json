@@ -1,0 +1,7 @@
+{
+  "quietStartup": true,
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "defaultProvider": "openai-codex",
+  "defaultModel": "gpt-6-sol",
+  "defaultThinkingLevel": "medium"
+}

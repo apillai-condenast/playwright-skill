@@ -3,3 +3,9 @@ usr_data_dir
 .env
 .env.*
 !.env.example
+analysis
+node_modules/
+test-results/
+playwright-report/
+test-state/
+test-results

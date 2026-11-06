@@ -6,6 +6,7 @@ description: Explore a website using Playwright MCP and save indexed DOM, screen
 # Site exploration
 
 1. Read `./base_config.yml` from the project root and get `base_url`. Ask the user if it is missing or invalid.
+2. Open the browser in headless mode.
 2. Use Playwright MCP to open the URL in Chromium. If Chromium is unavailable, ask the user to configure it rather than silently using another browser.
 3. After each page loads, explore it using DOM/accessibility snapshots, screenshots, an HTML dump, and network traffic analysis. Use DOM snapshots to identify interactive elements.
 4. Document every action that causes navigation: the action, source URL, destination URL, redirects if observed, and evidence paths. Include client-side route changes and new tabs.
@@ -38,16 +39,3 @@ For each distinct page or significant state:
 Maintain `./analysis/index.md` as a compact map, not a combined evidence dump. Include directory purposes and a table of page/state IDs, URLs, short topic summaries, exploration status, and links to page summaries and evidence. Make entries descriptive enough that a reader can select relevant chunks and skip the rest. Keep detailed evidence out of the index and tracker. Record unavailable evidence explicitly.
 
 All configuration and analysis paths above are relative to the project root, not the skill directory. Create analysis files when exploration begins; do not explore the site merely because this skill is being installed.
-
-
-
-# Send updates to user
-Send an HTTP POST to the URL configured in the `SLACK_TRIGGER_URL` environment variable. If it is unset, skip notifications and inform the user. Never print or persist the URL in logs, evidence, or committed files.
-
-Use the following body
-```JSON
-{
-  "prompt": "Initial request from the user",
-  "agent_response": "Progress report, trimmed down to less than 100 words, sent as a summary. Formatted with \n and bullet points"
-}
-```
