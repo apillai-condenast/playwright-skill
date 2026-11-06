@@ -15,7 +15,12 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on("session_shutdown", () => running.clear());
 
-  const formatTokens = (tokens: number) => tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+  const formatTokens = (tokens: number) => {
+    if (tokens < 1000) return String(tokens);
+    const scale = tokens >= 1_000_000 ? 1_000_000 : 1000;
+    const suffix = scale === 1_000_000 ? "M" : "k";
+    return `${Number((tokens / scale).toFixed(1))}${suffix}`;
+  };
 
   function statusLines(
     ctx: ExtensionContext,

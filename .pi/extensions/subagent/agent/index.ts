@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, open, writeFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { STATUS_EVENT, type RunStats, type SubagentEvent } from "../state.ts";
 function stopChild(child: ChildProcess, signal: NodeJS.Signals) {
   if (!child.pid) return;
   try {
-    if (process.platform === "win32") child.kill(signal);
+    if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
     else process.kill(-child.pid, signal);
   } catch {
     // The process may have already exited.
@@ -23,6 +23,7 @@ async function runSubagent(
   cwd: string,
   name: string,
   prompt: string,
+  timeout?: number,
   signal?: AbortSignal,
   onStart?: () => void,
   onUsage?: (tokens: number, cost: number) => void,
@@ -32,6 +33,9 @@ async function runSubagent(
     throw new Error("Name must contain only letters, digits, underscores, or hyphens (starting with a letter or digit).");
   }
   if (!prompt.trim()) throw new Error("Prompt must not be empty.");
+  if (timeout !== undefined && (!Number.isInteger(timeout) || timeout < 1 || timeout > 2_147_483)) {
+    throw new Error("Timeout must be an integer between 1 and 2147483 seconds.");
+  }
   signal?.throwIfAborted();
 
   const sessionDir = join(cwd, ".pi-sessions");
@@ -50,6 +54,7 @@ async function runSubagent(
   let tokens = 0;
   let cost = 0;
   let error = false;
+  let timedOut = false;
   const decoder = new TextDecoder();
   let pending = "";
   const processLine = (line: string) => {
@@ -95,11 +100,31 @@ async function runSubagent(
         for (const line of lines) processLine(line);
       });
       const abort = () => stopChild(child, "SIGTERM");
+      let finishTermination: Promise<void> | undefined;
+      const timeoutTimer = timeout === undefined ? undefined : setTimeout(() => {
+        timedOut = true;
+        stopChild(child, "SIGTERM");
+        // The parent may exit before its descendants. Keep the process-group kill scheduled.
+        finishTermination = new Promise((resolveTermination) => {
+          setTimeout(() => {
+            stopChild(child, "SIGKILL");
+            resolveTermination();
+          }, 5000);
+        });
+      }, timeout * 1000);
+      const cleanup = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        signal?.removeEventListener("abort", abort);
+      };
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
-      child.once("error", reject);
-      child.once("close", (code) => {
-        signal?.removeEventListener("abort", abort);
+      child.once("error", (error) => {
+        cleanup();
+        reject(error);
+      });
+      child.once("close", async (code) => {
+        cleanup();
+        await finishTermination;
         resolve(code);
       });
     });
@@ -113,7 +138,7 @@ async function runSubagent(
       await output.close();
     }
   }
-  return { promptPath: relative(cwd, promptPath), outputPath: relative(cwd, outputPath), exitCode, response: response.trim().slice(-50_000), tokens, cost, error };
+  return { promptPath: relative(cwd, promptPath), outputPath: relative(cwd, outputPath), exitCode, response: response.trim().slice(-50_000), tokens, cost, error: error || timedOut, timedOut };
 }
 
 export default function (pi: ExtensionAPI) {
@@ -136,7 +161,7 @@ export default function (pi: ExtensionAPI) {
     })));
   });
 
-  async function runWithFeedback(ctx: ExtensionContext, name: string, prompt: string, signal?: AbortSignal) {
+  async function runWithFeedback(ctx: ExtensionContext, name: string, prompt: string, timeout?: number, signal?: AbortSignal) {
     const id = randomUUID();
     let startedAt: number | undefined;
     let tokens = 0;
@@ -145,7 +170,7 @@ export default function (pi: ExtensionAPI) {
     let failed = false;
     const emit = (event: SubagentEvent) => pi.events.emit(STATUS_EVENT, event);
     try {
-      result = await runSubagent(ctx.cwd, name, prompt, signal, () => {
+      result = await runSubagent(ctx.cwd, name, prompt, timeout, signal, () => {
         startedAt = Date.now();
         emit({ type: "start", id, name, startedAt });
         if (ctx.hasUI) ctx.ui.notify(`Subagent ${name} started running the prompt`, "info");
@@ -182,11 +207,12 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       name: Type.String({ description: "Subagent name (also its folder name)" }),
       prompt: Type.String({ description: "Initial prompt to write to a file and pass to pi as @path" }),
+      timeout: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483, description: "Maximum runtime in seconds; no limit if omitted" })),
     }),
-    async execute(_id, { name, prompt }, signal, _onUpdate, ctx) {
-      const result = await runWithFeedback(ctx, name, prompt, signal);
+    async execute(_id, { name, prompt, timeout }, signal, _onUpdate, ctx) {
+      const result = await runWithFeedback(ctx, name, prompt, timeout, signal);
       return {
-        content: [{ type: "text", text: result.response || `Subagent exited with code ${result.exitCode} without a response.` }],
+        content: [{ type: "text", text: result.timedOut ? `Subagent ${name} timed out after ${timeout} seconds.` : result.response || `Subagent exited with code ${result.exitCode} without a response.` }],
         details: result,
         isError: result.exitCode !== 0 || result.error,
       };
