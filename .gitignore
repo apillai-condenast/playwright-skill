@@ -5,6 +5,7 @@ usr_data_dir
 !.env.example
 analysis
 node_modules/
+.pi-sessions/
 test-results/
 playwright-report/
 test-state/
