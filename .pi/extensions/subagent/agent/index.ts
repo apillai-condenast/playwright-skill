@@ -192,7 +192,7 @@ export default function (pi: ExtensionAPI) {
         const record: RunStats = {
           name, startedAt, tokens, cost,
           elapsedMs: Date.now() - startedAt,
-          status: failed || result?.exitCode !== 0 || result?.error ? "failed" : "completed",
+          status: result?.timedOut ? "timedout" : failed || result?.exitCode !== 0 || result?.error ? "failed" : "completed",
         };
         pi.appendEntry("subagent-run", record);
         emit({ type: "end", id });

@@ -4,7 +4,7 @@ export type RunStats = {
   elapsedMs: number;
   tokens: number;
   cost: number;
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "timedout";
 };
 
 export type SubagentEvent =
