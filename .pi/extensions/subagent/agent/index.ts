@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, open, writeFile } from "node:fs/promises";
@@ -9,6 +9,16 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { STATUS_EVENT, type RunStats, type SubagentEvent } from "../state.ts";
 
+function stopChild(child: ChildProcess, signal: NodeJS.Signals) {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch {
+    // The process may have already exited.
+  }
+}
+
 async function runSubagent(
   cwd: string,
   name: string,
@@ -16,6 +26,7 @@ async function runSubagent(
   signal?: AbortSignal,
   onStart?: () => void,
   onUsage?: (tokens: number, cost: number) => void,
+  onChild?: (child: ChildProcess) => void,
 ) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
     throw new Error("Name must contain only letters, digits, underscores, or hyphens (starting with a letter or digit).");
@@ -72,8 +83,10 @@ async function runSubagent(
       const child = spawn("pi", ["--mode", "json", "--session-dir", sessionDir, `@./.pi-sessions/subagents/${name}/prompt_${stamp}.txt`], {
         cwd,
         shell: false,
+        detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", output.fd],
       });
+      onChild?.(child);
       child.stdout.pipe(log, { end: false });
       child.stdout.on("data", (chunk: Buffer) => {
         pending += decoder.decode(chunk, { stream: true });
@@ -81,7 +94,7 @@ async function runSubagent(
         pending = lines.pop() ?? "";
         for (const line of lines) processLine(line);
       });
-      const abort = () => child.kill("SIGTERM");
+      const abort = () => stopChild(child, "SIGTERM");
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) abort();
       child.once("error", reject);
@@ -104,6 +117,25 @@ async function runSubagent(
 }
 
 export default function (pi: ExtensionAPI) {
+  const children = new Set<ChildProcess>();
+  let shuttingDown = false;
+
+  pi.on("session_shutdown", async () => {
+    shuttingDown = true;
+    await Promise.all([...children].map((child) => new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
+      const timeout = setTimeout(() => {
+        stopChild(child, "SIGKILL");
+        resolve();
+      }, 5000);
+      child.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      stopChild(child, "SIGTERM");
+    })));
+  });
+
   async function runWithFeedback(ctx: ExtensionContext, name: string, prompt: string, signal?: AbortSignal) {
     const id = randomUUID();
     let startedAt: number | undefined;
@@ -121,6 +153,10 @@ export default function (pi: ExtensionAPI) {
         tokens = nextTokens;
         cost = nextCost;
         emit({ type: "usage", id, tokens, cost });
+      }, (child) => {
+        children.add(child);
+        child.once("close", () => children.delete(child));
+        if (shuttingDown) stopChild(child, "SIGTERM");
       });
       return result;
     } catch (error) {
