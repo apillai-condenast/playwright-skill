@@ -10,3 +10,4 @@ test-results/
 playwright-report/
 test-state/
 test-results
+grouped-test-cases
